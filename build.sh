@@ -1,2 +1,2 @@
-source name.sh
-docker build -t ${IMAGE} -f Dockerfile .
+source ./name.sh
+sudo docker build -t ${IMAGE} -f Dockerfile .

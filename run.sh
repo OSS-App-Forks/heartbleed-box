@@ -1,5 +1,5 @@
-source name.sh
-docker run \
+source ./name.sh
+sudo docker run \
 	-it \
 	--rm \
 	-p 4433:4433 \
